@@ -13,7 +13,7 @@ const SimulationDashboard = () => {
   const [shipments, setShipments] = useState([]);
   const [riskZones, setRiskZones] = useState([]);
   const [activeDisruptions, setActiveDisruptions] = useState([]);
-  const [systemImpact, setSystemImpact] = useState({ totalCostIncrease: 0, avgDelay: 0 });
+  const [systemImpact, setSystemImpact] = useState({ totalCostIncrease: 0, totalCarbonIncrease: 0, avgDelay: 0 });
   const [loading, setLoading] = useState(true);
   const [tickCount, setTickCount] = useState(0);
   const [isTickActive, setIsTickActive] = useState(true);
@@ -26,6 +26,7 @@ const SimulationDashboard = () => {
     delivered: shipments.filter(s => s.status === 'delivered').length,
     rerouted: shipments.filter(s => s.rerouted).length,
     economicImpact: systemImpact.totalCostIncrease,
+    carbonImpact: systemImpact.totalCarbonIncrease,
   };
 
   const fetchState = async (isManual = false) => {
@@ -37,7 +38,7 @@ const SimulationDashboard = () => {
       ]);
       setShipments(shRes.data.shipments);
       setTickCount(shRes.data.tickCount);
-      setSystemImpact(shRes.data.systemImpact || { totalCostIncrease: 0, avgDelay: 0 });
+      setSystemImpact(shRes.data.systemImpact || { totalCostIncrease: 0, totalCarbonIncrease: 0, avgDelay: 0 });
       setRiskZones(riskRes.data.riskZones);
       setActiveDisruptions(riskRes.data.activeDisruptions);
     } catch (err) {
@@ -152,12 +153,12 @@ const SimulationDashboard = () => {
 
         <div className="card" style={{ padding: '1rem' }}>
           <div style={{ display: 'flex', gap: '1rem', alignItems: 'center' }}>
-            <div style={{ background: 'rgba(16, 185, 129, 0.1)', color: 'var(--success)', padding: '0.75rem', borderRadius: '12px' }}>
-              <Clock size={24} />
+            <div style={{ background: 'rgba(52, 211, 153, 0.1)', color: '#34d399', padding: '0.75rem', borderRadius: '12px' }}>
+              <Zap size={24} />
             </div>
             <div>
-              <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>AVG DELAY</div>
-              <div style={{ fontSize: '1.25rem', fontWeight: 700 }}>{systemImpact.avgDelay} hrs</div>
+              <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>CARBON IMPACT</div>
+              <div style={{ fontSize: '1.25rem', fontWeight: 700, color: '#34d399' }}>+{(stats.carbonImpact / 1000).toFixed(2)}t <span style={{fontSize: '0.7rem', opacity: 0.8}}>CO₂</span></div>
             </div>
           </div>
         </div>
@@ -263,16 +264,26 @@ const SimulationDashboard = () => {
                       }}></div>
                     </div>
                     
-                    {s.impactDelta && s.impactDelta.cost > 0 && (
-                      <div style={{ marginBottom: '8px', fontSize: '0.65rem', padding: '4px 6px', background: 'rgba(239, 68, 68, 0.08)', borderRadius: '4px', display: 'flex', justifyContent: 'space-between' }}>
-                        <span style={{ color: 'var(--danger)' }}>Impact: +${s.impactDelta.cost.toLocaleString()}</span>
-                        <span style={{ color: 'var(--warning)' }}>Delay: +{s.impactDelta.delayHours}hrs</span>
+                    {s.impactDelta && (s.impactDelta.cost > 0 || s.impactDelta.carbonKg > 0) && (
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', marginBottom: '8px' }}>
+                        <div style={{ fontSize: '0.65rem', padding: '4px 6px', background: 'rgba(239, 68, 68, 0.08)', borderRadius: '4px', display: 'flex', justifyContent: 'space-between' }}>
+                          <span style={{ color: 'var(--danger)' }}>Financial: +${s.impactDelta.cost.toLocaleString()}</span>
+                          <span style={{ color: 'var(--warning)' }}>Delay: +{s.impactDelta.delayHours}hrs</span>
+                        </div>
+                        {s.impactDelta.carbonKg > 0 && (
+                          <div style={{ fontSize: '0.65rem', padding: '4px 6px', background: 'rgba(52, 211, 153, 0.08)', borderRadius: '4px', display: 'flex', justifyContent: 'space-between' }}>
+                            <span style={{ color: '#34d399', display: 'flex', alignItems: 'center', gap: '3px' }}>🍃 Eco Impact: +{s.impactDelta.carbonKg}kg CO₂</span>
+                          </div>
+                        )}
                       </div>
                     )}
 
                     <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.7rem' }}>
                       <span style={{ display: 'flex', alignItems: 'center', gap: '2px' }}><Clock size={10}/> ETA: {new Date(s.eta).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}</span>
-                      <span style={{ fontWeight: 600, color: 'var(--success)' }}>${s.cost.total.toLocaleString()}</span>
+                      <div style={{ display: 'flex', gap: '8px' }}>
+                         <span style={{ color: '#34d399' }}>{(s.carbon / 1000).toFixed(1)}t CO₂</span>
+                         <span style={{ fontWeight: 600, color: 'var(--success)' }}>${s.cost.total.toLocaleString()}</span>
+                      </div>
                     </div>
                   </div>
                 ))

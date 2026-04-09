@@ -12,8 +12,8 @@ const API_BASE = import.meta.env.VITE_API_BASE_URL || 'http://localhost:4000/api
 const ShipmentInput = () => {
   const navigate = useNavigate();
   const [formData, setFormData] = useState({
-    origin: 'New York',
-    destination: 'London',
+    origin: 'new york',
+    destination: 'london',
     itemType: 'electronics',
     weight: 2500,
     volume: 12,
@@ -232,7 +232,12 @@ const ShipmentInput = () => {
                   >
                     <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '1rem' }}>
                       <div style={{ fontSize: '1.5rem' }}>{route.icon}</div>
-                      {route.recommended && <span className="badge badge-low" style={{ background: 'var(--primary-glow)', color: 'var(--text-main)', border: '1px solid var(--primary)' }}>Recommended</span>}
+                      <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+                        <span className="badge" style={{ background: 'rgba(52, 211, 153, 0.1)', color: '#34d399', border: '1px solid rgba(52, 211, 153, 0.2)', fontSize: '0.7rem', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                          🍃 {(route.totalCarbonKg / 1000).toFixed(2)}t CO₂
+                        </span>
+                        {route.recommended && <span className="badge badge-low" style={{ background: 'var(--primary-glow)', color: 'var(--text-main)', border: '1px solid var(--primary)' }}>Recommended</span>}
+                      </div>
                     </div>
                     
                     <h3 style={{ marginBottom: '0.25rem' }}>{route.name}</h3>

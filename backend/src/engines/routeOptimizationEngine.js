@@ -3,8 +3,8 @@
  * Generates 4 deterministic route variants: fastest, cheapest, lowest_risk, balanced
  */
 
-const { HUBS, CITY_TO_HUB, SEA_LANES } = require('./hubs');
-const { calculateRouteCost, calculatePathRisk, distanceKm } = require('./riskCostEngine');
+const { HUBS, CITY_TO_HUB, SEA_LANES, LAND_REGIONS, CANAL_ZONES } = require('./hubs');
+const { calculateRouteCost, calculatePathRisk, calculateRouteCarbon, distanceKm } = require('./riskCostEngine');
 
 // Speed (km/h) and cost biases per mode
 const MODE_SPECS = {
@@ -61,7 +61,7 @@ function getSeaWaypoints(originHubId, destHubId, disruptions = []) {
   const d = HUBS[destHubId];
   if (!o || !d) return [];
 
-  const points = [{ lat: o.lat, lng: o.lng }];
+  let points = [{ lat: o.lat, lng: o.lng }];
   
   const oRegion = o.region;
   const dRegion = d.region;
@@ -74,72 +74,84 @@ function getSeaWaypoints(originHubId, destHubId, disruptions = []) {
                                         distanceKm(dis.lat, dis.lng, 12.6, 43.3) < dis.radius); // Also check Bab al-Mandeb
   }
 
-  // Europe/Americas <-> East Asia / SE Asia
-  const isWest = oRegion === 'europe' || oRegion === 'north_america' || o.lng < -20;
-  const isAsia = dRegion === 'east_asia' || dRegion === 'southeast_asia' || dRegion === 'south_asia';
-  const isMidEast = dRegion === 'middle_east';
+  const isAmericasEast = (oRegion === 'north_america' || oRegion === 'south_america') && o.lng > -100;
+  const isAmericasWest = (oRegion === 'north_america' || oRegion === 'south_america') && o.lng <= -100;
+  const destAmericasWest = (dRegion === 'north_america' || dRegion === 'south_america') && d.lng <= -100;
 
-  // WEST <-> ASIA OR MIDDLE EAST
+  // Europe/Americas-East <-> East Asia / SE Asia
+  const isWest = oRegion === 'europe' || isAmericasEast || (o.lng < -20 && o.lng > -100);
+  const isAsia = dRegion === 'east_asia' || dRegion === 'southeast_asia' || dRegion === 'south_asia' || dRegion === 'oceania';
+  const isMidEast = dRegion === 'middle_east';
+  
+  // Define key corridors in West -> East order (Americas -> Asia)
+  const suezWaypoints = [
+    { lat: 36.0, lng: -5.3 },   // Gibraltar
+    { lat: 37.8, lng: 11.0 },   // Tunis
+    { lat: 34.5, lng: 24.0 },   // Crete
+    { lat: 31.5, lng: 32.2 },   // Port Said
+    { lat: 30.5, lng: 32.3 },   // Suez
+    { lat: 22.0, lng: 38.0 },   // Red Sea Mid
+    { lat: 12.6, lng: 43.3 },   // Bab al-Mandeb
+    { lat: 12.0, lng: 54.0 },   // Socotra
+  ];
+
+  const capeWaypoints = [
+    { lat: 15.0, lng: -35.0 },  // Mid Atlantic
+    { lat: -5.0,  lng: -20.0 }, // Equatorial Atlantic
+    { lat: -25.0, lng: 0.0 },   // Deep South Atlantic
+    { lat: -42.0, lng: 20.0 },  // Wide Cape Arc
+    { lat: -30.0, lng: 45.0 },  // South Madagascar Sweep
+    { lat: -15.0, lng: 60.0 },  // Indian Ocean
+  ];
+
+  const northEuropeWaypoints = [
+    { lat: 49.5, lng: -3.0 },  // English Channel
+    { lat: 42.0, lng: -10.5 }, // Bay of Biscay / Portugal Coast
+  ];
+
   if (isWest && (isAsia || isMidEast)) {
     if (avoidSuez) {
-      if (o.lng < -30) points.push({ lat: 35.0, lng: -40.0 }); // Atlantic Mid
-      points.push({ lat: 10.0, lng: -25.0 }); // Mid Atlantic
-      points.push({ lat: -35.0, lng: 20.0 }); // Cape of Good Hope (Detour)
-      points.push({ lat: -20.0, lng: 55.0 }); // Indian Ocean
-      if (isMidEast) {
-        points.push({ lat: 26.5, lng: 56.4 }); // Strait of Hormuz
-      } else {
-        points.push({ lat: 6.0,  lng: 78.0 });   // South India
-        points.push({ lat: 1.3,  lng: 103.8 });  // Malacca / Singapore
-      }
+      if (o.lng < -30) points.push({ lat: 35.0, lng: -40.0 });
+      else if (o.lat > 45) points.push(...northEuropeWaypoints);
+      points.push(...capeWaypoints);
     } else {
-      if (o.lng < -30) points.push({ lat: 35.0, lng: -40.0 }); // Atlantic Mid
-      points.push({ lat: 36.0, lng: -5.3 });   // Gibraltar
-      points.push({ lat: 37.0, lng: 12.0 });   // Mediterranean Mid
-      points.push({ lat: 30.5, lng: 32.3 });   // Suez Canal
-      points.push({ lat: 12.6, lng: 43.3 });   // Bab al-Mandeb (Red Sea exit)
+      if (o.lng < -30) points.push({ lat: 35.0, lng: -40.0 });
+      else if (o.lat > 45) points.push(...northEuropeWaypoints);
+      points.push(...suezWaypoints);
+    }
 
-      if (isMidEast) {
-        points.push({ lat: 26.5, lng: 56.4 }); // Strait of Hormuz
-      } else {
-        points.push({ lat: 6.0,  lng: 78.0 });   // South India
-        points.push({ lat: 1.3,  lng: 103.8 });  // Malacca / Singapore
+    if (isMidEast) {
+      points.push({ lat: 26.5, lng: 56.4 }); // Hormuz
+    } else {
+      if (dRegion === 'south_asia') points.push({ lat: 18.9, lng: 72.8 });
+      else {
+        points.push({ lat: 6.0, lng: 78.0 });
+        if (dRegion !== 'south_asia') {
+          points.push({ lat: 1.3, lng: 103.8 }); // Singapore
+          if (dRegion === 'east_asia') points.push({ lat: 21.0, lng: 115.0 });
+        }
       }
     }
   } 
-  // ASIA/MIDEAST <-> WEST
   else if ((oRegion === 'east_asia' || oRegion === 'southeast_asia' || oRegion === 'middle_east') && isWest) {
     if (avoidSuez) {
-      if (oRegion === 'middle_east') {
-         points.push({ lat: 26.5, lng: 56.4 }); // Exit Persian Gulf
-      } else {
-         points.push({ lat: 1.3,  lng: 103.8 });
-         points.push({ lat: 6.0,  lng: 78.0 });
-      }
-      points.push({ lat: -20.0, lng: 55.0 }); // Indian Ocean
-      points.push({ lat: -35.0, lng: 20.0 }); // Cape of Good Hope (Detour)
-      points.push({ lat: 10.0, lng: -25.0 }); // Mid Atlantic
+      const reversedCape = [...capeWaypoints].reverse();
+      points.push(...reversedCape);
       if (d.lng < -30) points.push({ lat: 35.0, lng: -40.0 });
+      else if (d.lat > 45) points.push(...[...northEuropeWaypoints].reverse());
     } else {
-      if (oRegion === 'middle_east') {
-         points.push({ lat: 26.5, lng: 56.4 }); // Exit Persian Gulf
-      } else {
-         points.push({ lat: 1.3,  lng: 103.8 });
-         points.push({ lat: 6.0,  lng: 78.0 });
-      }
-      points.push({ lat: 12.6, lng: 43.3 }); // Enter Red Sea
-      points.push({ lat: 30.5, lng: 32.3 }); // Suez
-      points.push({ lat: 37.0, lng: 12.0 }); // Med
-      points.push({ lat: 36.0, lng: -5.3 }); // Gibraltar
+      const reversedSuez = [...suezWaypoints].reverse();
+      points.push(...reversedSuez);
       if (d.lng < -30) points.push({ lat: 35.0, lng: -40.0 });
+      else if (d.lat > 45) points.push(...[...northEuropeWaypoints].reverse());
     }
   }
   // Trans-Pacific
-  else if (o.lng < -100 && (dRegion === 'east_asia' || dRegion === 'southeast_asia')) {
+  else if (isAmericasWest && isAsia) {
     points.push({ lat: 35.0, lng: -160.0 });
     points.push({ lat: 30.0, lng: 170.0 });
   }
-  else if ((oRegion === 'east_asia' || oRegion === 'southeast_asia') && d.lng < -100) {
+  else if (isAsia && destAmericasWest) {
     points.push({ lat: 30.0, lng: 170.0 });
     points.push({ lat: 35.0, lng: -160.0 });
   }
@@ -149,7 +161,119 @@ function getSeaWaypoints(originHubId, destHubId, disruptions = []) {
   }
 
   points.push({ lat: d.lat, lng: d.lng });
-  return points;
+
+  // Apply Smart Detours around arbitrary disruptions
+  return applyDetours(points, disruptions);
+}
+
+/**
+ * Geometric bypass for sea waypoints
+ * If a segment between A and B intersects a disruption radius, 
+ * inject a detour point.
+ */
+function applyDetours(points, disruptions) {
+  if (!disruptions || disruptions.length === 0) return points;
+
+  // 1. Densify path to provide resolution for curves
+  let densified = [points[0]];
+  for (let i = 0; i < points.length - 1; i++) {
+    const A = points[i];
+    const B = points[i+1];
+    const dist = distanceKm(A.lat, A.lng, B.lat, B.lng);
+    const steps = Math.ceil(dist / 400);
+    for (let s = 1; s <= steps; s++) {
+      const t = s / steps;
+      densified.push({
+        lat: A.lat + (B.lat - A.lat) * t,
+        lng: A.lng + (B.lng - A.lng) * t
+      });
+    }
+  }
+
+  let result = densified;
+  for (const D of disruptions) {
+    result = detourAroundZone(result, D);
+  }
+
+  return result;
+}
+
+/**
+ * For a single disruption zone D, scan all segments of the path.
+ * If ANY segment passes through the zone, replace the midpoint with
+ * two bypass waypoints that arc cleanly around the outside of the radius.
+ */
+function detourAroundZone(points, D) {
+  const radiusKm = D.radius || 300;
+  const clearanceKm = radiusKm * 1.6;
+  
+  let firstAffected = -1;
+  let lastAffected = -1;
+
+  for (let i = 0; i < points.length; i++) {
+    const d = distanceKm(points[i].lat, points[i].lng, D.lat, D.lng);
+    if (d < clearanceKm) {
+        if (firstAffected === -1) firstAffected = i;
+        lastAffected = i;
+    }
+  }
+
+  for (let i = 0; i < points.length - 1; i++) {
+    const A = points[i], B = points[i+1];
+    const dLat = B.lat - A.lat, dLng = B.lng - A.lng;
+    const len2 = dLat * dLat + dLng * dLng;
+    if (len2 === 0) continue;
+    const t = Math.max(0, Math.min(1, ((D.lat - A.lat) * dLat + (D.lng - A.lng) * dLng) / len2));
+    const dist = distanceKm(A.lat + t * dLat, A.lng + t * dLng, D.lat, D.lng);
+    if (dist < clearanceKm) {
+        if (firstAffected === -1 || i < firstAffected) firstAffected = i;
+        if (lastAffected === -1 || i + 1 > lastAffected) lastAffected = i + 1;
+    }
+  }
+
+  if (firstAffected === -1) return points;
+
+  const startIdx = Math.max(0, firstAffected - 1);
+  const endIdx = Math.min(points.length - 1, lastAffected + 1);
+  const startPt = points[startIdx];
+  const endPt = points[endIdx];
+
+  const dLat = endPt.lat - startPt.lat;
+  const dLng = endPt.lng - startPt.lng;
+  const midLat = (startPt.lat + endPt.lat) / 2;
+  const midLng = (startPt.lng + endPt.lng) / 2;
+  
+  const perpLat = -dLng;
+  const perpLng = dLat;
+  const mag = Math.sqrt(perpLat * perpLat + perpLng * perpLng) || 1;
+  const normPerpLat = perpLat / mag;
+  const normPerpLng = perpLng / mag;
+
+  const degLat = 1 / 111.12;
+  const degLng = 1 / (111.12 * Math.cos(D.lat * Math.PI / 180));
+
+  const peakFactor = clearanceKm * 1.5;
+  const peak1 = { lat: D.lat + normPerpLat * peakFactor * degLat, lng: D.lng + normPerpLng * peakFactor * degLng };
+  const peak2 = { lat: D.lat - normPerpLat * peakFactor * degLat, lng: D.lng - normPerpLng * peakFactor * degLng };
+  
+  const dist1 = distanceKm(peak1.lat, peak1.lng, midLat, midLng);
+  const dist2 = distanceKm(peak2.lat, peak2.lng, midLat, midLng);
+  const chosenPeak = dist1 < dist2 ? peak1 : peak2;
+
+  const arc = [];
+  const numArcPoints = 5;
+  for (let i = 1; i <= numArcPoints; i++) {
+    const t = i / (numArcPoints + 1);
+    const lat = (1-t)**2 * startPt.lat + 2*(1-t)*t * chosenPeak.lat + t**2 * endPt.lat;
+    const lng = (1-t)**2 * startPt.lng + 2*(1-t)*t * chosenPeak.lng + t**2 * endPt.lng;
+    arc.push({ lat, lng });
+  }
+
+  return [
+    ...points.slice(0, startIdx + 1),
+    ...arc,
+    ...points.slice(endIdx)
+  ];
 }
 
 function buildDisplayPath(segments) {
@@ -195,6 +319,12 @@ function getFlightWaypoints(originHub, destHub, numPoints = 5) {
   if (!o || !d) return [];
 
   const points = [{ lat: o.lat, lng: o.lng }];
+  
+  // If points are essentially the same, don't build an arc
+  if (Math.abs(o.lat - d.lat) < 0.01 && Math.abs(o.lng - d.lng) < 0.01) {
+    return points;
+  }
+
   for (let i = 1; i < numPoints - 1; i++) {
     const t = i / (numPoints - 1);
     // Great circle interpolation (simplified spherical arc)
@@ -227,18 +357,59 @@ function generateRoutes(input, disruptions = []) {
 
   // Helper to build display path with disruptions
   const buildDisplayPathWithDisruptions = (segments) => {
-    return segments.map(seg => {
+    return segments.flatMap(seg => {
       let points = [];
       if (seg.mode === 'air') points = getFlightWaypoints(seg.origin, seg.dest);
       else if (seg.mode === 'sea') points = getSeaWaypoints(seg.origin, seg.dest, disruptions);
       else points = [ { lat: seg.originLat, lng: seg.originLng }, { lat: seg.destLat, lng: seg.destLng } ];
-      return { ...seg, points };
+      
+      if (seg.mode !== 'sea' || points.length < 2) {
+        return [{ ...seg, points }];
+      }
+
+      // High-Fidelity Splitting for Sea Routes
+      const subSegments = [];
+      for (let i = 0; i < points.length - 1; i++) {
+        const p1 = points[i];
+        const p2 = points[i + 1];
+        
+        // Calculate midpoint of THIS specific jump
+        const midLat = (p1.lat + p2.lat) / 2;
+        const midLng = (p1.lng + p2.lng) / 2;
+        
+        const isOverLand = LAND_REGIONS.some(reg => 
+          midLat > reg.minLat && midLat < reg.maxLat && 
+          midLng > reg.minLng && midLng < reg.maxLng
+        );
+
+        let finalMode = 'sea';
+        if (isOverLand) {
+          // CHECK FOR CANAL EXCLUSION
+          const inCanal = CANAL_ZONES.some(canal => 
+            distanceKm(midLat, midLng, canal.lat, canal.lng) < canal.radius
+          );
+
+          if (!inCanal) {
+            // Extra safety: ignore if near the very start/end of the WHOLE journey (ports)
+            const nearStart = distanceKm(midLat, midLng, points[0].lat, points[0].lng) < 150;
+            const nearEnd = distanceKm(midLat, midLng, points[points.length-1].lat, points[points.length-1].lng) < 150;
+            if (!nearStart && !nearEnd) finalMode = 'road';
+          }
+        }
+
+        subSegments.push({
+          ...seg,
+          mode: finalMode,
+          points: [p1, p2]
+        });
+      }
+      return subSegments;
     });
   };
 
   // 1: FASTEST (Air)
   const airSeg = buildSegment(originAir.hubId, destAir.hubId, 'air');
-  const r1Segments = [airSeg];
+  const r1Segments = [airSeg].filter(s => s && s.origin !== s.dest);
   const r1Display = buildDisplayPathWithDisruptions(r1Segments);
   const r1TotalDays = Math.ceil((airSeg.durationHours + 12) / 24);
   const route1 = {
@@ -251,6 +422,7 @@ function generateRoutes(input, disruptions = []) {
     totalDistanceKm: airSeg.distanceKm,
     totalTimeDays: r1TotalDays,
     cost: calculateRouteCost(r1Segments, weight, itemType, destRegion),
+    totalCarbonKg: calculateRouteCarbon(r1Segments, weight),
     risk: calculatePathRisk(r1Display.flatMap(d => d.points), itemType, fragility, disruptions),
     modes: ['air'],
     recommended: priorityMode === 'time',
@@ -260,7 +432,7 @@ function generateRoutes(input, disruptions = []) {
   const roadIn  = buildSegment(originAir.hubId, originSea.hubId, 'road');
   const seaSeg  = buildSegment(originSea.hubId, destSea.hubId, 'sea');
   const roadOut = buildSegment(destSea.hubId, destAir.hubId, 'road');
-  const r2Segments = [roadIn, seaSeg, roadOut].filter(Boolean);
+  const r2Segments = [roadIn, seaSeg, roadOut].filter(s => s && s.origin !== s.dest);
   const r2Display = buildDisplayPathWithDisruptions(r2Segments);
   const r2TotalHours = r2Segments.reduce((s, seg) => s + seg.durationHours, 0) + 48;
   const r2TotalDays = Math.ceil(r2TotalHours / 24);
@@ -274,6 +446,7 @@ function generateRoutes(input, disruptions = []) {
     totalDistanceKm: r2Segments.reduce((s, seg) => s + seg.distanceKm, 0),
     totalTimeDays: r2TotalDays,
     cost: calculateRouteCost(r2Segments, weight, itemType, destRegion),
+    totalCarbonKg: calculateRouteCarbon(r2Segments, weight),
     risk: calculatePathRisk(r2Display.flatMap(d => d.points), itemType, fragility, disruptions),
     modes: [...new Set(r2Segments.map(s => s.mode))],
     recommended: priorityMode === 'cost',
@@ -281,7 +454,10 @@ function generateRoutes(input, disruptions = []) {
 
   // 3: LOWEST RISK (Air via Safe Hub)
   const safeHub = chooseSafeHub(originAir.hubId, destAir.hubId, disruptions);
-  const r3Segments = [buildSegment(originAir.hubId, safeHub, 'air'), buildSegment(safeHub, destAir.hubId, 'air')].filter(Boolean);
+  const r3Segments = [
+    buildSegment(originAir.hubId, safeHub, 'air'), 
+    buildSegment(safeHub, destAir.hubId, 'air')
+  ].filter(s => s && s.origin !== s.dest);
   const r3Display = buildDisplayPathWithDisruptions(r3Segments);
   const r3TotalHours = r3Segments.reduce((s, seg) => s + seg.durationHours, 0) + 24;
   const r3TotalDays = Math.ceil(r3TotalHours / 24);
@@ -295,6 +471,7 @@ function generateRoutes(input, disruptions = []) {
     totalDistanceKm: r3Segments.reduce((s, seg) => s + seg.distanceKm, 0),
     totalTimeDays: r3TotalDays,
     cost: calculateRouteCost(r3Segments, weight, itemType, destRegion),
+    totalCarbonKg: calculateRouteCarbon(r3Segments, weight),
     risk: calculatePathRisk(r3Display.flatMap(d => d.points), itemType, fragility, disruptions),
     modes: ['air'],
     recommended: priorityMode === 'risk',
@@ -302,7 +479,11 @@ function generateRoutes(input, disruptions = []) {
 
   // 4: BALANCED (Hybrid Sea-Air)
   const transHub = chooseTransHub(originAir.hubId, destSea.hubId);
-  const r4Segments = [buildSegment(originAir.hubId, transHub, 'air'), buildSegment(transHub, destSea.hubId, 'sea'), buildSegment(destSea.hubId, destAir.hubId, 'road')].filter(Boolean);
+  const r4Segments = [
+    buildSegment(originAir.hubId, transHub, 'air'), 
+    buildSegment(transHub, destSea.hubId, 'sea'), 
+    buildSegment(destSea.hubId, destAir.hubId, 'road')
+  ].filter(s => s && s.origin !== s.dest);
   const r4Display = buildDisplayPathWithDisruptions(r4Segments);
   const r4TotalHours = r4Segments.reduce((s, seg) => s + seg.durationHours, 0) + 36;
   const r4TotalDays = Math.ceil(r4TotalHours / 24);
@@ -316,6 +497,7 @@ function generateRoutes(input, disruptions = []) {
     totalDistanceKm: r4Segments.reduce((s, seg) => s + seg.distanceKm, 0),
     totalTimeDays: r4TotalDays,
     cost: calculateRouteCost(r4Segments, weight, itemType, destRegion),
+    totalCarbonKg: calculateRouteCarbon(r4Segments, weight),
     risk: calculatePathRisk(r4Display.flatMap(d => d.points), itemType, fragility, disruptions),
     modes: [...new Set(r4Segments.map(s => s.mode))],
     recommended: priorityMode === 'balanced',

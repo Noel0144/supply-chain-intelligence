@@ -46,6 +46,9 @@ class SimulationTracker {
       eta: Date.now() + (route.totalTimeDays * 24 * 3600000),
       lastUpdate: Date.now(),
       cost: route.cost,
+      baseCost: route.cost.total,
+      carbon: route.totalCarbonKg,
+      baseCarbon: route.totalCarbonKg,
       risk: route.risk,
       rerouted: false,
       rerouteHistory: [],
@@ -74,7 +77,7 @@ class SimulationTracker {
       if (!tp || tp.length < 2) continue;
 
       // Each tick advances position. Scale based on total path length.
-      shipment.progress += 0.05;
+      shipment.progress += 0.15; // Increased speed for better visual feedback
 
       if (shipment.progress >= 1.0) {
         shipment.progress = 0;
@@ -156,8 +159,12 @@ class SimulationTracker {
     for (const [id, shipment] of this.shipments) {
       if (shipment.status !== 'in_transit') continue;
       if (this.isAffected(shipment, d)) {
-        this.rerouteShipment(shipment, d);
-        affected.push(shipment);
+        try {
+          this.rerouteShipment(shipment, d);
+          affected.push(shipment);
+        } catch (err) {
+          console.error(`[SimTracker] Failed to reroute shipment ${id}:`, err.message);
+        }
       }
     }
 
@@ -193,11 +200,11 @@ class SimulationTracker {
     const originalRouteId = shipment.rerouteHistory.length > 0 ? shipment.rerouteHistory[0].oldRouteId : 'cheapest';
     
     // Call generateRoutes without the current disruptions to see the optimal paths
-    const result = generateRoutes({ ...shipment.input, priorityMode: originalRouteId === 'cheapest' ? 'cost' : 'time' }, this.disruptions);
+    const result = generateRoutes(shipment.input, this.disruptions);
     let targetRoute = result.routes.find(r => r.id === originalRouteId);
-    if (!targetRoute) targetRoute = result.routes[0];
+    if (!targetRoute) targetRoute = result.routes.find(r => r.recommended) || result.routes[0];
 
-    // Splice from current location to target route, identical to reroute detours
+    // Splice from current location to target route
     const newTrackingPoints = [{ lat: shipment.currentLat, lng: shipment.currentLng, mode: shipment.currentSegmentMode }];
     if (targetRoute.displaySegments) {
       let minDistance = Infinity;
@@ -237,21 +244,24 @@ class SimulationTracker {
     shipment.totalSegments = newTrackingPoints.length - 1;
     shipment.currentSegmentIndex = 0;
     shipment.progress = 0;
-    shipment.rerouted = false; // Flag removed!
+    shipment.cost = targetRoute.cost; // UPDATED: Use actual new route cost
+    shipment.risk = targetRoute.risk;
+    shipment.rerouted = false; 
     
     // Recalculate ETA recovery
     const remainingKm = newTrackingPoints.reduce((acc, p, idx) => {
         if (idx === 0) return 0;
         return acc + distanceKm(newTrackingPoints[idx-1].lat, newTrackingPoints[idx-1].lng, p.lat, p.lng);
     }, 0);
-    const speedRatio = targetRoute.totalDistanceKm / targetRoute.totalTimeDays; 
+    const speedRatio = (targetRoute.totalDistanceKm || 1) / (targetRoute.totalTimeDays || 1); 
     const addedTimeMs = (remainingKm / speedRatio) * 24 * 60 * 60 * 1000;
     
     shipment.eta = Date.now() + addedTimeMs;
-    // Costs are tricky. We maintain the sunk base cost delta but reduce future delta theoretically
+
+    // Accurate Impact Update: Current Cost vs Base Original Cost
     shipment.impactDelta = {
-      cost: shipment.impactDelta ? shipment.impactDelta.cost * 0.5 : 0, // 50% recovery on resolution!
-      delayHours: Math.max(0, Math.round((shipment.eta - shipment.baseEta) / (1000 * 60 * 60))) 
+      cost: shipment.cost.total - (shipment.baseCost || shipment.cost.total),
+      delayHours: Math.max(0, Math.round((shipment.eta - (shipment.baseEta || shipment.eta)) / (1000 * 60 * 60))) 
     };
   }
 
@@ -259,102 +269,149 @@ class SimulationTracker {
     const tp = shipment.trackingPoints;
     if (!tp) return false;
 
-    for (let i = shipment.currentSegmentIndex; i < tp.length; i++) {
-      const dist = distanceKm(tp[i].lat, tp[i].lng, disruption.lat, disruption.lng);
-      if (dist < disruption.radius) return true;
+    // Check every segment of the remaining path
+    for (let i = shipment.currentSegmentIndex; i < tp.length - 1; i++) {
+      const A = tp[i];
+      const B = tp[i + 1];
+
+      // Find closest point on segment AB to disruption center D
+      const dLat = B.lat - A.lat;
+      const dLng = B.lng - A.lng;
+      if (dLat === 0 && dLng === 0) {
+        if (distanceKm(A.lat, A.lng, disruption.lat, disruption.lng) < disruption.radius) return true;
+        continue;
+      }
+
+      const t = ((disruption.lat - A.lat) * dLat + (disruption.lng - A.lng) * dLng) / (dLat * dLat + dLng * dLng);
+      const clampedT = Math.max(0, Math.min(1, t));
+      
+      const closestLat = A.lat + clampedT * dLat;
+      const closestLng = A.lng + clampedT * dLng;
+      
+      const distToCenter = distanceKm(closestLat, closestLng, disruption.lat, disruption.lng);
+      if (distToCenter < disruption.radius) return true;
     }
     return false;
   }
 
   rerouteShipment(shipment, disruption) {
-    const oldCost = shipment.cost.total;
-    const oldEta = shipment.eta;
+    const oldCost = shipment.cost?.total || 0;
+    const oldEta  = shipment.eta;
 
     shipment.rerouteHistory.push({
-      timestamp: Date.now(),
-      reason: disruption.name,
+      timestamp:  Date.now(),
+      reason:     disruption.name,
       oldRouteId: shipment.selectedRouteId,
-      oldCost: oldCost,
+      oldCost,
     });
 
-    const result = generateRoutes(shipment.input, this.disruptions);
-    const newRoute = result.routes.find(r => r.id === 'lowest_risk') || result.routes[0];
+    // Regenerate routes with active disruptions so the path avoids them
+    const result   = generateRoutes(shipment.input, this.disruptions);
+    const newRoute = result.routes.find(r => r.id === shipment.selectedRouteId) || result.routes[0];
 
-    // Build new tracking path
-    const newTrackingPoints = [];
-    
-    // Instead of teleporting to the start of the new route, we detour from EXACT current location
-    // We append the current location as the start of the new detour segment
-    newTrackingPoints.push({ 
-      lat: shipment.currentLat, 
-      lng: shipment.currentLng, 
-      mode: shipment.currentSegmentMode 
-    });
+    // Build new flat tracking path: start from current position, then all points of the new route
+    const newTrackingPoints = [
+      { lat: shipment.currentLat, lng: shipment.currentLng, mode: shipment.currentSegmentMode }
+    ];
 
     if (newRoute.displaySegments) {
-      let foundInsertionPoint = false;
-      let minDistance = Infinity;
-      let closestSegmentIdx = 0;
-      let closestPointIdx = 0;
+      // Find which segment of the new route is geographically closest to where the ship is now
+      let minDist = Infinity;
+      let bestSegIdx = 0;
+      let bestPtIdx  = 0;
 
-      // Find the geographical point on the new route closest to where the ship actually is
       newRoute.displaySegments.forEach((seg, sIdx) => {
-        if (seg.mode === shipment.currentSegmentMode) {
-          seg.points.forEach((p, pIdx) => {
-            const d = distanceKm(shipment.currentLat, shipment.currentLng, p.lat, p.lng);
-            if (d < minDistance) {
-              minDistance = d;
-              closestSegmentIdx = sIdx;
-              closestPointIdx = pIdx;
-            }
-          });
-        }
+        seg.points.forEach((p, pIdx) => {
+          const d = distanceKm(shipment.currentLat, shipment.currentLng, p.lat, p.lng);
+          if (d < minDist) { minDist = d; bestSegIdx = sIdx; bestPtIdx = pIdx; }
+        });
       });
 
-      // Splice the rest of the new route starting from the closest entry point
-      for (let i = closestSegmentIdx; i < newRoute.displaySegments.length; i++) {
+      // Append from that point onwards
+      for (let i = bestSegIdx; i < newRoute.displaySegments.length; i++) {
         const seg = newRoute.displaySegments[i];
-        const startPointIdx = (i === closestSegmentIdx) ? closestPointIdx : 0;
-        for (let j = startPointIdx; j < seg.points.length; j++) {
+        const start = (i === bestSegIdx) ? bestPtIdx : 0;
+        for (let j = start; j < seg.points.length; j++) {
           newTrackingPoints.push({ ...seg.points[j], mode: seg.mode });
         }
       }
-      
-      // Failsafe: if modes mismatched entirely or couldn't find splice, just append the full new route
-      if (newTrackingPoints.length === 1) {
-        newRoute.displaySegments.forEach(seg => {
-          seg.points.forEach(p => newTrackingPoints.push({ ...p, mode: seg.mode }));
-        });
+
+      // Failsafe: if we only have the ship position, append everything
+      if (newTrackingPoints.length <= 1) {
+        newRoute.displaySegments.forEach(seg =>
+          seg.points.forEach(p => newTrackingPoints.push({ ...p, mode: seg.mode }))
+        );
       }
     }
 
-    shipment.route = newRoute;
-    shipment.trackingPoints = newTrackingPoints;
-    shipment.totalSegments = newTrackingPoints.length - 1;
+    shipment.route              = newRoute;
+    shipment.trackingPoints     = newTrackingPoints;
+    shipment.totalSegments      = newTrackingPoints.length - 1;
     shipment.currentSegmentIndex = 0;
-    shipment.progress = 0;
-    shipment.cost = newRoute.cost;
-    shipment.risk = newRoute.risk;
-    shipment.rerouted = true;
-    
-    // Impact Tracking & Dynamic ETA adjustment
+    shipment.progress           = 0;
+    shipment.cost               = newRoute.cost;
+    shipment.risk               = newRoute.risk;
+    shipment.rerouted           = true;
+
+    // Track base values for impact reporting
     if (!shipment.baseCost) shipment.baseCost = oldCost;
-    if (!shipment.baseEta) shipment.baseEta = oldEta;
+    if (!shipment.baseEta)  shipment.baseEta  = oldEta;
+    if (!shipment.baseCarbon) shipment.baseCarbon = shipment.carbon || newRoute.totalCarbonKg;
+
+    // Recompute ETA
+    const totalDist = newRoute.totalDistanceKm || 1;
+    const totalDays = newRoute.totalTimeDays   || 1;
+    const speedRatio = totalDist / totalDays; // km/day
     
-    // Recompute ETA directly:
-    const remainingKm = newTrackingPoints.reduce((acc, p, idx) => {
-        if (idx === 0) return 0;
-        return acc + distanceKm(newTrackingPoints[idx-1].lat, newTrackingPoints[idx-1].lng, p.lat, p.lng);
+    const oldRemainingKm = shipment.trackingPoints.slice(shipment.currentSegmentIndex).reduce((acc, p, idx, arr) => {
+      if (idx === 0) return 0;
+      return acc + distanceKm(arr[idx - 1].lat, arr[idx - 1].lng, p.lat, p.lng);
     }, 0);
-    // Rough simulation heuristic: 1000km ≈ 1 day average depending on mode, but let's use route totalTime ratio
-    const speedRatio = newRoute.totalDistanceKm / newRoute.totalTimeDays; 
-    const addedTimeMs = (remainingKm / speedRatio) * 24 * 60 * 60 * 1000;
+
+    const remainingKm = newTrackingPoints.reduce((acc, p, idx) => {
+      if (idx === 0) return 0;
+      return acc + distanceKm(newTrackingPoints[idx - 1].lat, newTrackingPoints[idx - 1].lng, p.lat, p.lng);
+    }, 0);
     
+    const addedTimeMs = (remainingKm / speedRatio) * 24 * 60 * 60 * 1000;
     shipment.eta = Date.now() + addedTimeMs;
 
+    // Approximate Economic Impact
+    const lengthDiff = Math.max(0, remainingKm - oldRemainingKm);
+    const detourPenaltyKm = disruption ? (disruption.radius || 300) * 1.5 : 500;
+    
+    // Total extra km is macro change (e.g. avoided Suez) + local detour penalty
+    const extraKm = lengthDiff + detourPenaltyKm;
+    
+    const weightTonnes = Math.max((shipment.input?.weight || 1000) / 1000, 0.01);
+    const modeCostRate = shipment.currentSegmentMode === 'air' ? 4.20 : 
+                         shipment.currentSegmentMode === 'road' ? 0.25 : 0.05; // Base freight rate
+    // Factor in fuel, indirect overheads + rerouting administrative penalties
+    const totalRatePerKm = modeCostRate * 2.0; 
+    const hazardFee = 2500; // Flat administrative penalty for rerouting under threat
+    
+    const extraCost = Math.round(extraKm * weightTonnes * totalRatePerKm) + hazardFee;
+    
+    console.log(`[REROUTE] Rerouting shipment ${shipment.id}`);
+    console.log(`[REROUTE] oldRemainingKm: ${oldRemainingKm.toFixed(2)}, newRemainingKm: ${remainingKm.toFixed(2)}`);
+    console.log(`[REROUTE] extraKm: ${extraKm.toFixed(2)}, extraCost: $${extraCost}`);
+    
+    shipment.cost = { 
+      ...newRoute.cost, 
+      freight: (newRoute.cost?.freight || 0) + Math.round(extraKm * weightTonnes * modeCostRate),
+      total: (newRoute.cost?.total || 0) + extraCost 
+    };
+
+    // Carbon Impact
+    const carbonRate = shipment.currentSegmentMode === 'air' ? 0.500 : 
+                       shipment.currentSegmentMode === 'road' ? 0.100 : 0.015;
+    const extraCarbonKg = Math.round(extraKm * weightTonnes * carbonRate);
+    shipment.carbon = (newRoute.totalCarbonKg || 0) + extraCarbonKg;
+
     shipment.impactDelta = {
-      cost: shipment.cost.total - shipment.baseCost,
-      delayHours: Math.max(0, Math.round((shipment.eta - shipment.baseEta) / (1000 * 60 * 60))) 
+      cost:       (shipment.cost?.total || 0) - shipment.baseCost,
+      delayHours: Math.max(0, Math.round((shipment.eta - shipment.baseEta) / (1000 * 60 * 60))),
+      carbonKg:   (shipment.carbon || 0) - shipment.baseCarbon
     };
   }
 
@@ -365,10 +422,12 @@ class SimulationTracker {
   getSystemImpact() {
     const shipmentsArr = Array.from(this.shipments.values());
     const totalCostIncrease = shipmentsArr.reduce((sum, s) => sum + (s.impactDelta?.cost || 0), 0);
+    const totalCarbonIncrease = shipmentsArr.reduce((sum, s) => sum + (s.impactDelta?.carbonKg || 0), 0);
     const avgDelay = shipmentsArr.reduce((sum, s) => sum + (s.impactDelta?.delayHours || 0), 0) / (shipmentsArr.length || 1);
     
     return {
       totalCostIncrease,
+      totalCarbonIncrease,
       avgDelay: Math.round(avgDelay * 10) / 10
     };
   }

@@ -42,6 +42,8 @@ const HUBS = {
   'PORT_DURBAN': { name: 'Port of Durban', lat: -29.8685, lng: 31.0218, type: 'seaport', country: 'ZA', region: 'africa' },
   'PORT_TOKYO': { name: 'Port of Tokyo', lat: 35.6210, lng: 139.7745, type: 'seaport', country: 'JP', region: 'east_asia' },
   'PORT_SYDNEY': { name: 'Port of Sydney', lat: -33.8688, lng: 151.2093, type: 'seaport', country: 'AU', region: 'oceania' },
+  'PORT_FELIXSTOWE': { name: 'Port of Felixstowe', lat: 51.9600, lng: 1.3500, type: 'seaport', country: 'GB', region: 'europe' },
+  'PORT_TIANJIN': { name: 'Port of Tianjin', lat: 38.9800, lng: 117.7500, type: 'seaport', country: 'CN', region: 'east_asia' },
   'PORT_SUEZ': { name: 'Suez Canal', lat: 30.5852, lng: 32.2654, type: 'seaport', country: 'EG', region: 'middle_east', isChokepoint: true },
   'PORT_PANAMA': { name: 'Panama Canal', lat: 9.0800, lng: -79.6817, type: 'seaport', country: 'PA', region: 'central_america', isChokepoint: true },
   'PORT_HORMUZ': { name: 'Strait of Hormuz', lat: 26.5917, lng: 56.2519, type: 'seaport', country: 'OM', region: 'middle_east', isChokepoint: true },
@@ -57,29 +59,29 @@ const HUBS = {
 const CITY_TO_HUB = {
   'new york': { airport: 'JFK', seaport: 'PORT_NEW_YORK' },
   'los angeles': { airport: 'LAX', seaport: 'PORT_LOS_ANGELES' },
-  'chicago': { airport: 'ORD' },
-  'london': { airport: 'LHR', seaport: 'PORT_ROTTERDAM' },
-  'paris': { airport: 'CDG' },
-  'frankfurt': { airport: 'FRA' },
+  'chicago': { airport: 'ORD', seaport: 'PORT_NEW_YORK' },
+  'london': { airport: 'LHR', seaport: 'PORT_FELIXSTOWE' },
+  'paris': { airport: 'CDG', seaport: 'PORT_ANTWERP' },
+  'frankfurt': { airport: 'FRA', seaport: 'PORT_HAMBURG' },
   'amsterdam': { airport: 'AMS', seaport: 'PORT_ROTTERDAM' },
   'rotterdam': { airport: 'AMS', seaport: 'PORT_ROTTERDAM' },
   'antwerp': { airport: 'AMS', seaport: 'PORT_ANTWERP' },
-  'milan': { airport: 'MXP' },
+  'milan': { airport: 'MXP', seaport: 'PORT_ANTWERP' },
   'dubai': { airport: 'DXB', seaport: 'PORT_DUBAI' },
-  'doha': { airport: 'DOH' },
+  'doha': { airport: 'DOH', seaport: 'PORT_DUBAI' },
   'mumbai': { airport: 'BOM', seaport: 'PORT_MUMBAI' },
-  'delhi': { airport: 'DEL' },
+  'delhi': { airport: 'DEL', seaport: 'PORT_MUMBAI' },
   'singapore': { airport: 'SIN', seaport: 'PORT_SINGAPORE' },
   'shanghai': { airport: 'PVG', seaport: 'PORT_SHANGHAI' },
-  'beijing': { airport: 'PEK' },
+  'beijing': { airport: 'PEK', seaport: 'PORT_TIANJIN' },
   'hong kong': { airport: 'HKG', seaport: 'PORT_HONG_KONG' },
   'tokyo': { airport: 'NRT', seaport: 'PORT_TOKYO' },
   'seoul': { airport: 'ICN', seaport: 'PORT_BUSAN' },
   'sydney': { airport: 'SYD', seaport: 'PORT_SYDNEY' },
   'sao paulo': { airport: 'GRU', seaport: 'PORT_SANTOS' },
-  'mexico city': { airport: 'MEX' },
+  'mexico city': { airport: 'MEX', seaport: 'PORT_LOS_ANGELES' },
   'johannesburg': { airport: 'JNB', seaport: 'PORT_DURBAN' },
-  'nairobi': { airport: 'NBO' },
+  'nairobi': { airport: 'NBO', seaport: 'PORT_DURBAN' },
   'cairo': { airport: 'CAI', seaport: 'PORT_SUEZ' },
   'hamburg': { airport: 'FRA', seaport: 'PORT_HAMBURG' },
   'busan': { airport: 'ICN', seaport: 'PORT_BUSAN' },
@@ -118,4 +120,33 @@ const SEA_LANES = {
   ],
 };
 
-module.exports = { HUBS, CITY_TO_HUB, SEA_LANES };
+// Bounding boxes for major land regions to detect land-clipping 
+// Significantly tightened to "Interior Cores" to prevent offensive ocean clipping
+const LAND_REGIONS = [
+  // North America
+  { name: 'US/Canada Core', minLat: 30, maxLat: 60, minLng: -115, maxLng: -75 },
+  { name: 'Mexico Inland', minLat: 18, maxLat: 30, minLng: -105, maxLng: -90 },
+  // South America
+  { name: 'SA Inland North', minLat: -15, maxLat: 5, minLng: -70, maxLng: -50 },
+  { name: 'SA Inland South', minLat: -35, maxLat: -15, minLng: -70, maxLng: -60 },
+  // Europe & Asia
+  { name: 'Europe Core', minLat: 45, maxLat: 65, minLng: 2, maxLng: 35 },
+  { name: 'Russia/Central Asia', minLat: 40, maxLat: 70, minLng: 35, maxLng: 120 },
+  { name: 'China Inland', minLat: 25, maxLat: 45, minLng: 100, maxLng: 120 },
+  { name: 'India Inland', minLat: 15, maxLat: 25, minLng: 74, maxLng: 84 },
+  { name: 'Middle East Inland', minLat: 15, maxLat: 30, minLng: 42, maxLng: 55 },
+  // Africa
+  { name: 'Sahara', minLat: 15, maxLat: 30, minLng: -10, maxLng: 30 },
+  { name: 'Sub-Sahara Central', minLat: 5, maxLat: 15, minLng: -10, maxLng: 35 },
+  { name: 'Africa South Inland', minLat: -30, maxLat: 5, minLng: 15, maxLng: 35 },
+  // Australia
+  { name: 'Australia Inland', minLat: -35, maxLat: -15, minLng: 115, maxLng: 150 }
+];
+
+// Defined canal zones for visual override (keep sea color)
+const CANAL_ZONES = [
+  { name: 'Suez Canal', lat: 30.5, lng: 32.2, radius: 100 },
+  { name: 'Panama Canal', lat: 9.1, lng: -79.7, radius: 100 }
+];
+
+module.exports = { HUBS, CITY_TO_HUB, SEA_LANES, LAND_REGIONS, CANAL_ZONES };

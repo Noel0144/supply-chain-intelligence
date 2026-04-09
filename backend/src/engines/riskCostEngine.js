@@ -153,11 +153,34 @@ function calculateRouteCost(segments, weight, itemType, destRegion = 'europe') {
   };
 }
 
+// ── CARBON FOOTPRINT ENGINE ───────────────────────────────────────────────────
+// Default emissions in kg CO2 per tonne-km
+const CO2_PER_KM_TONNE = {
+  air:  0.500,  // Air freight is highly carbon intensive
+  road: 0.100,  // Trucking
+  rail: 0.030,  // Trains are efficient
+  sea:  0.015,  // Ocean freight is most efficient per tonne-km
+};
+
+function calculateRouteCarbon(segments, weight) {
+  const weightTonnes = Math.max(weight / 1000, 0.01);
+  let totalCarbonKg = 0;
+  
+  for (const seg of segments) {
+    const rate = CO2_PER_KM_TONNE[seg.mode] || 0.100;
+    totalCarbonKg += (rate * seg.distanceKm * weightTonnes);
+  }
+  
+  return Math.round(totalCarbonKg);
+}
+
 module.exports = {
   calculatePathRisk,
   calculateRouteCost,
   calculateSegmentCost,
+  calculateRouteCarbon,
   distanceKm,
   RISK_ZONES,
   TRANSPORT_COST_PER_KM,
+  CO2_PER_KM_TONNE,
 };
