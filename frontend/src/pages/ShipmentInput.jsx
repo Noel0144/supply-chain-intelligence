@@ -232,12 +232,7 @@ const ShipmentInput = () => {
                   >
                     <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '1rem' }}>
                       <div style={{ fontSize: '1.5rem' }}>{route.icon}</div>
-                      <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
-                        <span className="badge" style={{ background: 'rgba(52, 211, 153, 0.1)', color: '#34d399', border: '1px solid rgba(52, 211, 153, 0.2)', fontSize: '0.7rem', display: 'flex', alignItems: 'center', gap: '4px' }}>
-                          🍃 {(route.totalCarbonKg / 1000).toFixed(2)}t CO₂
-                        </span>
-                        {route.recommended && <span className="badge badge-low" style={{ background: 'var(--primary-glow)', color: 'var(--text-main)', border: '1px solid var(--primary)' }}>Recommended</span>}
-                      </div>
+                      {route.recommended && <span className="badge badge-low" style={{ background: 'var(--primary-glow)', color: 'var(--text-main)', border: '1px solid var(--primary)' }}>Recommended</span>}
                     </div>
                     
                     <h3 style={{ marginBottom: '0.25rem' }}>{route.name}</h3>

@@ -181,14 +181,6 @@ const MapVisualization = ({ shipments = [], riskZones = [], activeDisruptions = 
                   <h4 style={{ marginBottom: '4px', color: 'white' }}>{s.input.origin} ➝ {s.input.destination}</h4>
                   <p style={{ fontSize: '0.8rem', color: '#94a3b8' }}>Status: {s.status.replace('_', ' ')}</p>
                   <div style={{ borderTop: '1px solid rgba(255,255,255,0.1)', margin: '8px 0', paddingTop: '8px' }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.75rem', marginBottom: '4px' }}>
-                      <span>Footprint:</span> <span style={{ color: '#34d399' }}>{(s.carbon / 1000).toFixed(1)}t CO₂</span>
-                    </div>
-                    {s.impactDelta && s.impactDelta.carbonKg > 0 && (
-                      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.7rem', color: '#10b981', marginBottom: '8px' }}>
-                         <span>Extra CO₂:</span> <span>+{s.impactDelta.carbonKg}kg</span>
-                      </div>
-                    )}
                     <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.75rem' }}>
                       <span>Risk:</span> <span style={{ color: s.risk.composite > 60 ? '#ef4444' : '#10b981' }}>{s.risk.composite}%</span>
                     </div>
